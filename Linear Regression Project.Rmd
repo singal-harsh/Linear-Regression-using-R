@@ -1,0 +1,298 @@
+---
+title: "Linear Regression HW5"
+author: "Anupam, Ambita, Digvijay, Harsh, Yashwanth"
+date: "11/27/2019"
+output: word_document
+---
+
+## Introduction
+
+Alumni donations are an important source of revenue for colleges and universities. If administrators could determine the factors that influence increases in the percentage of alumni donation, they might be able to implement policies that could lead to increased revenues. Research shows that students who are more satisfied with their contact with teachers are more likely to graduate. As a result, one might suspect that smaller class sizes and lower student-faculty ratios might lead to a higher percentage of satisfied graduates, which in turn might lead to increases in the percentage of alumni donations. Similarly, to find various other factors that can affect the alumni donation rate, we have taken the dataset of 48 national universities (America’s Best Colleges, Year 2000 Edition) and implemented various linear regression model to find best model which can answer this question.
+
+
+```{r libraries required, echo = FALSE, message=FALSE, warning=FALSE}
+library(car)
+library(tidyverse)
+library(GGally)
+library(MASS)
+library(dvmisc)
+library(leaps)
+```
+
+
+## Data Preparation and EDA
+
+Let us read the dataset and have a quick glimpse of the data types of the variables
+
+```{r echo=FALSE}
+url <- "https://bgreenwell.github.io/uc-bana7052/data/alumni.csv"
+alumni <- read.csv(url, stringsAsFactors = F)
+glimpse(alumni)
+glimpse(alumni)
+```
+
+Now,let us look at the individual summaries for each of the 5 variables.
+
+```{r echo=FALSE}
+summary(alumni$percent_of_classes_under_20)
+summary(alumni$student_faculty_ratio)
+summary(alumni$alumni_giving_rate)
+table(alumni$private)
+```
+
+Let us understand if there are any outliers, before we proceed to look at the distributions.
+
+```{r, echo=FALSE}
+par(mfrow = c(1,3))
+boxplot(alumni$percent_of_classes_under_20,main = 'Boxplot for % Classes_Under_20')
+boxplot(alumni$student_faculty_ratio, main = 'Boxplot for Student Faculty Ratio')
+boxplot(alumni$alumni_giving_rate,main = 'Boxplot for Alumni Giving Rate')
+```
+
+We see that there are no outliers. Let us move ahead to check distributions
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+# pairs(alumni[,c(2:4)], cex = 1.2, pch = 19, 
+#       col = adjustcolor("darkred", alpha.f = 0.5))
+GGally::ggpairs(
+  data = alumni[, c(2:5)]
+)
+```
+
+The correlations among predictors don't seem to be an issue here. We see some non - linear relationship between alumni giving rate and percent of classes under 20. This might be an issue for us and might have to apply some transformations to correct this.
+
+We see that the variable student faculty ratio is skewed towards the right with the bulk of the observations having student faculty ratio between 5 to 10. The percent of classes under 20 is skewed towards the left with most schools having between 60% to 70% of their classes under 20. Also most of the schools have ~ 20 to 40% of their alumni making donations.
+
+Now, let us look at how the categorical variable behaves.
+
+```{r, echo=FALSE}
+par(mfrow = c(1,2))
+alumni$private <- as.factor(alumni$private)
+ggplot(alumni, aes(x = student_faculty_ratio, y = alumni_giving_rate, group = private)) +
+  geom_point(aes(colour = private), size = 3) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE,
+              color = "black") +
+  theme_light()
+
+ggplot(alumni, aes(x = percent_of_classes_under_20, y = alumni_giving_rate, group = private)) +
+  geom_point(aes(colour = private), size = 3) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE,
+              color = "black") +
+  theme_light()
+
+```
+
+As the slopes do not look parallel for both the predictors percent of classes under 20 and student faculty ratio. So we might have to include an interaction variable between percent of classes under 20 and private as well as for student faculty ratio and private.
+
+## Modeling
+
+Let us use forward selection, backward elimination and step-wise selection to decide on the best performing model.
+We are using BIC as the accuracy metric for this part of modeling.
+
+```{r, echo=FALSE}
+alumni_copy <- subset(alumni, select = -ï..school)
+fit_min <- lm(alumni_giving_rate ~ 1, data = alumni_copy)
+#summary(fit_min)
+fit_max <- lm(alumni_giving_rate ~ .^3, data = alumni_copy)
+#summary(fit_max)
+fit_be <- step(fit_max, direction = "backward", 
+             trace = 0, k = log(nrow(alumni_copy)))
+fit_fs <- step(fit_min, direction = "forward", 
+             scope = list(lower = fit_min,
+                          upper = fit_max),
+             trace = 0, k = log(nrow(alumni_copy)))
+fit_step <- step(fit_fs, direction = "both", 
+             scope = list(lower = fit_min,
+                          upper = fit_max),
+             trace = 0, k = log(nrow(alumni_copy)))
+
+```
+
+As we have built the 3 models using forward selection, backward elimination and step wise selection, let us compare the model metrics and understand how should we be proceeding. For this, let us define a function which will provide the metrics to compare the models.
+
+```{r Function_definitions, echo=FALSE}
+
+PRESS <- function(object, ...) {
+  if(!missing(...)) {
+    res <- sapply(list(object, ...), FUN = function(x) {
+      sum(rstandard(x, type = "predictive") ^ 2)
+    })
+    names(res) <- as.character(match.call()[-1L])
+    res
+  } else {
+    sum(rstandard(object, type = "predictive") ^ 2)
+  }
+}
+
+modelMetrics <- function(object, ...) {
+  if(!missing(...)) {
+    res <- sapply(list(object, ...), FUN = function(x) {
+      c("AIC" = AIC(x), "BIC" = BIC(x), 
+        "adjR2" = summary(x)$adj.r.squared,
+        "RMSE"  = sigma(x), "PRESS" = PRESS(x), 
+        "nterms" = length(coef(x)))
+    })
+    colnames(res) <- as.character(match.call()[-1L])
+    res
+  } else {
+    c("AIC" = AIC(object), "BIC" = BIC(object), 
+      "adjR2" = summary(object)$adj.r.squared, 
+      "RMSE"  = sigma(object), "PRESS" = PRESS(object),
+      "nterms" = length(coef(object)))
+  }
+}
+```
+
+
+```{r Model_metrics, echo=FALSE}
+model_check <- modelMetrics(fit_be, fit_fs, fit_step)
+round(model_check,3)
+summary(fit_step)
+(RMSE <- sqrt(get_mse(fit_be)))
+```
+
+## Residual Diagnostics
+
+All the 3 approaches end up giving the same model that shows student_faculty_ratio is the only significant variable which contributes towards the variability of the response variable. Now let us check the diagnostics. 
+
+```{r Diagnostics, echo=FALSE}
+par(mfrow = c(1,3))
+alumni_model_stats <- alumni %>%
+  lm(alumni_giving_rate ~ student_faculty_ratio, data = .) %>%
+  broom::augment() %>%
+  mutate(row_num = 1:n())
+
+# Fitted vs Residuals
+ggplot(alumni_model_stats, aes(x = .fitted, y = .std.resid)) +
+  geom_point(alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red2") +
+  geom_hline(yintercept = c(-2, 2), linetype = "dotted") +
+  # geom_smooth(color = "forestgreen", alpha = 0.1, se = FALSE) +
+  xlab("Fitted value") +
+  ylab("Studentized residual") +
+  theme_light()
+
+# Normality check for residuals
+ggplot(alumni_model_stats, aes(sample = .std.resid)) +
+  geom_qq(alpha = 0.3) +
+  geom_qq_line(linetype = "dashed", color = "red2") +
+  xlab("Theoretical quantile") +
+  ylab("Sample quantile") +
+  theme_light()
+
+# serial correlation check for residuals
+ggplot(alumni_model_stats, aes(x = row_num, y = .std.resid)) +
+  geom_point(alpha = 0.3) +
+  geom_line() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red2") +
+  xlab("Index") +
+  ylab("Stundentized residual") +
+  theme_light()
+
+# Predictor vs Residuals
+ggplot(alumni_model_stats, aes(x = student_faculty_ratio, y = .std.resid)) +
+  geom_point(alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red2") +
+  geom_hline(yintercept = c(-2, 2), linetype = "dotted") +
+  geom_smooth(color = "forestgreen", alpha = 0.1, se = FALSE) +
+  ylab("Stundentized residual") +
+  theme_light()
+
+# hat values vs Residuals
+ggplot(alumni_model_stats, aes(x = .hat, y = .std.resid)) +
+  geom_point(alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red2") +
+  geom_hline(yintercept = c(-2, 2), linetype = "dotted") +
+  geom_smooth(color = "forestgreen", alpha = 0.1, se = FALSE) +
+  ylab("Studentized residual") +
+  theme_light()
+
+```
+
+We do not see any mean structure present, but we see there might be a problem with non-constant variance. It is a skew right data , might be probelmatic given we have only 48 observations. We see that serial correlation is not a problem here, as the gap between the points is quite random and does not show a pattern. This seems to be a random scatter as we are do not see any shape here except for the line trying to follow the scatter. We do see an outlier which is changing the direction of the fitted line - this point is an influential point.
+
+## Transformation (Box - Cox Procedure)
+
+As we see a problem of non - constant variance as well as a problem with non - normality, we will apply box - cox trasformation to check if we can fix this.
+
+```{r Transformation, echo=FALSE}
+bc <- MASS::boxcox(alumni_giving_rate ~ student_faculty_ratio, data = alumni)
+(lambda <- bc$x[which.max(bc$y)])
+alumni$alumni_giving_rate2 <- ((alumni$alumni_giving_rate ^ lambda) - 1) / lambda
+
+alumni_model_stats_transformed1 <- alumni %>%
+  lm(alumni_giving_rate2 ~ student_faculty_ratio, data = .) %>%
+  broom::augment() %>%
+  mutate(row_num = 1:n())
+
+Transformed_model_fit <- lm(alumni_giving_rate2 ~ student_faculty_ratio, data = alumni)
+summary(Transformed_model_fit)
+(RMSE <- sqrt(get_mse(Transformed_model_fit)))
+
+```
+
+The lambda value for transformation is 0.42424. We see that the model variance being explained increased by ~4%. We also managed to decrease the RMSE by ~85% from 9.1 to 1.3
+
+## Residual Diagnostics
+
+Let us look at the model diagnostics again - 
+
+```{r, echo=FALSE}
+# Fitted vs Residuals
+ggplot(alumni_model_stats_transformed1, aes(x = .fitted, y = .std.resid)) +
+  geom_point(alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red2") +
+  geom_hline(yintercept = c(-2, 2), linetype = "dotted") +
+  # geom_smooth(color = "forestgreen", alpha = 0.1, se = FALSE) +
+  xlab("Fitted value") +
+  ylab("Studentized residual") +
+  theme_light()
+
+
+# Normality check for residuals
+ggplot(alumni_model_stats_transformed1, aes(sample = .std.resid)) +
+  geom_qq(alpha = 0.3) +
+  geom_qq_line(linetype = "dashed", color = "red2") +
+  xlab("Theoretical quantile") +
+  ylab("Sample quantile") +
+  theme_light()
+
+# serial correlation check for residuals
+ggplot(alumni_model_stats_transformed1, aes(x = row_num, y = .std.resid)) +
+  geom_point(alpha = 0.3) +
+  geom_line() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red2") +
+  xlab("Index") +
+  ylab("Stundentized residual") +
+  theme_light()
+
+
+# Predictor vs Residuals
+ggplot(alumni_model_stats_transformed1, aes(x = student_faculty_ratio, y = .std.resid)) +
+  geom_point(alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red2") +
+  geom_hline(yintercept = c(-2, 2), linetype = "dotted") +
+  geom_smooth(color = "forestgreen", alpha = 0.1, se = FALSE) +
+  ylab("Stundentized residual") +
+  theme_light()
+
+
+# hat values vs Residuals
+ggplot(alumni_model_stats_transformed1, aes(x = .hat, y = .std.resid)) +
+  geom_point(alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red2") +
+  geom_hline(yintercept = c(-2, 2), linetype = "dotted") +
+  geom_smooth(color = "forestgreen", alpha = 0.1, se = FALSE) +
+  ylab("Studentized residual") +
+  theme_light()
+
+```
+
+We do not see any mean structure present and we seem to have fixed the non - constant variance assumption through box - cox method. It is a skew right data , might be probelmatic given we have only 48 observations. We were not able to fix this through box - cox method. # We see that serial correlation is not a problem here, as the gap between the points is quite random and does not show a pattern. This seems to be a random scatter as we are do not see any shape here except for the line trying to follow the scatter. We do see an outlier which is changing the direction of the fitted line. This point is the influential point.
+
+So our final model is Alumni_giving_rate = (0.42424 * (10.9507 - 0.32134(Student_faculty_ratio)) + 1) ^ (1/0.42424). 
+
+Some parameter models - adjusted R^2 is 0.5844 and RMSE is 1.3.
+
+
+
